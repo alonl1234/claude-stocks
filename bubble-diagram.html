@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>סכמת בועות – מרכז מוסיקה קהילתי</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', 'Arial Hebrew', Arial, sans-serif;
+      background: linear-gradient(135deg, #0d1b2a 0%, #1b2838 60%, #162032 100%);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 28px 20px 40px;
+      direction: rtl;
+    }
+    .header {
+      text-align: center;
+      color: #fff;
+      margin-bottom: 22px;
+    }
+    .header h1 {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: 0.5px;
+      text-shadow: 0 2px 12px rgba(0,0,0,0.5);
+      margin-bottom: 6px;
+    }
+    .header p {
+      font-size: 13px;
+      color: rgba(255,255,255,0.55);
+    }
+    .diagram-wrap {
+      background: rgba(255,255,255,0.04);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 22px;
+      padding: 18px;
+      box-shadow: 0 24px 80px rgba(0,0,0,0.55);
+      overflow: hidden;
+    }
+    svg { display: block; cursor: default; }
+    .bubble-g { cursor: grab; }
+    .bubble-g:active { cursor: grabbing; }
+    .hint {
+      text-align: center;
+      color: rgba(255,255,255,0.35);
+      font-size: 11.5px;
+      margin-top: 10px;
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 20px;
+      justify-content: center;
+      max-width: 1020px;
+    }
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.1);
+      padding: 5px 13px;
+      border-radius: 20px;
+      color: rgba(255,255,255,0.85);
+      font-size: 12px;
+    }
+    .legend-dot {
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .total-box {
+      margin-top: 16px;
+      padding: 8px 24px;
+      background: rgba(255,255,255,0.07);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 12px;
+      color: rgba(255,255,255,0.7);
+      font-size: 12.5px;
+      text-align: center;
+    }
+    @media print {
+      body { background: white; padding: 10px; }
+      .diagram-wrap { border: 1px solid #ccc; box-shadow: none; background: white; }
+      .hint { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>&#127926; סכמת בועות — מרכז מוסיקה קהילתי</h1>
+  <p>תכנון אדריכלי שנה ב' &nbsp;|&nbsp; פרויקט גמר תשפ"ו &nbsp;|&nbsp; אדר' גבי סוריאנו</p>
+</div>
+
+<div class="diagram-wrap">
+  <svg id="svg" width="1020" height="760"></svg>
+</div>
+
+<p class="hint">ניתן לגרור את הבועות לסידור מחדש</p>
+<div class="legend" id="legend"></div>
+<div class="total-box" id="total"></div>
+
+<script>
+const NS = 'http://www.w3.org/2000/svg';
+
+const ZONES = {
+  entry:       { label: 'כניסה ותנועה',     color: '#FFD166', stroke: '#D4A520', text: '#1a1208' },
+  learning:    { label: 'אזור לימוד',        color: '#06C98A', stroke: '#04976A', text: '#021a11' },
+  performance: { label: 'הופעות ואירועים',   color: '#9B5DE5', stroke: '#7033BF', text: '#f0e8ff' },
+  recording:   { label: 'הקלטה ופרודקשן',   color: '#FF6B6B', stroke: '#CC3A3A', text: '#1a0000' },
+  service:     { label: 'שירות וקהל',        color: '#4FC3F7', stroke: '#0288D1', text: '#001a26' },
+  admin:       { label: 'ניהול וצוות',       color: '#FFB347', stroke: '#CC7800', text: '#1a0e00' },
+  utilities:   { label: 'תשתיות ואחסון',    color: '#A0AEC0', stroke: '#718096', text: '#0d1117' },
+};
+
+// area in m², position is initial
+const NODES = [
+  // ── ENTRY CENTER ──
+  { id: 'entry',    label: ['מבואת כניסה', 'ומודיעין'],   area: 35,  zone: 'entry',       x: 510, y: 385 },
+
+  // ── LEARNING ZONE top ──
+  { id: 'gcls',     label: ['כיתות קבוצתיות', '×5'],      area: 125, zone: 'learning',    x: 295, y: 175 },
+  { id: 'pcls',     label: ['כיתות 1 על 1', '×8'],         area: 104, zone: 'learning',    x: 500, y: 130 },
+  { id: 'mtg',      label: ['חדרי ישיבות', 'ולימודים ×2'], area: 30,  zone: 'learning',    x: 680, y: 185 },
+  { id: 'band',     label: ['חדר לימוד', 'להקות'],         area: 35,  zone: 'learning',    x: 800, y: 280 },
+  { id: 'teachers', label: ['חדר', 'מורים'],               area: 18,  zone: 'admin',       x: 375, y: 272 },
+
+  // ── PERFORMANCE right ──
+  { id: 'hall',     label: ['אולם רב', 'תכליתי'],          area: 120, zone: 'performance', x: 845, y: 415 },
+
+  // ── RECORDING top-right ──
+  { id: 'studio',   label: ['אולפני', 'הקלטות ×2'],        area: 80,  zone: 'recording',   x: 825, y: 148 },
+
+  // ── SERVICE bottom ──
+  { id: 'cafe',     label: ['קפיטריה', 'מטבח + מחסן'],    area: 70,  zone: 'service',     x: 355, y: 570 },
+  { id: 'storage',  label: ['מחסן כלים'],                  area: 40,  zone: 'utilities',   x: 680, y: 560 },
+
+  // ── ADMIN left ──
+  { id: 'admin',    label: ['חדר מנהל', '+ 2 פקידים'],     area: 35,  zone: 'admin',       x: 168, y: 390 },
+  { id: 'kitchen',  label: ['מטבחון', 'לעובדים'],          area: 5,   zone: 'admin',       x: 162, y: 520 },
+
+  // ── UTILITIES bottom ──
+  { id: 'mamam',    label: ['ממ"מ'],                        area: 15,  zone: 'utilities',   x: 510, y: 608 },
+  { id: 'wc',       label: ['שירותים', 'נשים + גברים'],    area: 25,  zone: 'utilities',   x: 655, y: 658 },
+  { id: 'stairs',   label: ['מדרגות', 'ומעלית'],           area: 18,  zone: 'entry',       x: 355, y: 665 },
+];
+
+const CONNECTIONS = [
+  // Entry → major hubs
+  ['entry', 'gcls',    'main'],
+  ['entry', 'pcls',    'main'],
+  ['entry', 'hall',    'main'],
+  ['entry', 'cafe',    'main'],
+  ['entry', 'admin',   'main'],
+  ['entry', 'studio',  'main'],
+  ['entry', 'stairs',  'main'],
+
+  // Learning cluster
+  ['gcls',     'pcls',    'cluster'],
+  ['gcls',     'teachers','cluster'],
+  ['pcls',     'teachers','cluster'],
+  ['pcls',     'mtg',     'cluster'],
+  ['mtg',      'band',    'cluster'],
+  ['band',     'studio',  'cluster'],
+  ['band',     'storage', 'cluster'],
+  ['gcls',     'storage', 'cluster'],
+  ['pcls',     'storage', 'cluster'],
+
+  // Performance links
+  ['hall',   'storage', 'cluster'],
+  ['hall',   'cafe',    'cluster'],
+  ['hall',   'studio',  'cluster'],
+
+  // Admin links
+  ['admin',  'teachers','cluster'],
+  ['admin',  'kitchen', 'cluster'],
+  ['cafe',   'kitchen', 'cluster'],
+
+  // Utilities
+  ['cafe',    'mamam',  'util'],
+  ['mamam',   'wc',     'util'],
+  ['mamam',   'stairs', 'util'],
+];
+
+// ── helpers ──
+function r(area) { return Math.max(Math.sqrt(area) * 5.4, 14); }
+function getNode(id) { return NODES.find(n => n.id === id); }
+
+// mutable positions
+const pos = {};
+NODES.forEach(n => { pos[n.id] = { x: n.x, y: n.y }; });
+
+const svg = document.getElementById('svg');
+
+// ── DEFS ──
+const defs = document.createElementNS(NS, 'defs');
+
+// drop shadow
+const filter = document.createElementNS(NS, 'filter');
+filter.setAttribute('id', 'dropshadow');
+filter.innerHTML = `<feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="rgba(0,0,0,0.35)"/>`;
+defs.appendChild(filter);
+
+// glow filter
+const glow = document.createElementNS(NS, 'filter');
+glow.setAttribute('id', 'glow');
+glow.innerHTML = `<feGaussianBlur stdDeviation="3" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>`;
+defs.appendChild(glow);
+
+svg.appendChild(defs);
+
+// ── ZONE BACKGROUND BLOBS ──
+const zoneBlobData = [
+  { label: 'אזור לימוד',      cx: 520, cy: 220, rx: 310, ry: 140, color: '#06C98A' },
+  { label: 'הופעות + הקלטה', cx: 840, cy: 300, rx: 115, ry: 210, color: '#9B5DE5' },
+  { label: 'ניהול',            cx: 165, cy: 455, rx: 85,  ry: 140, color: '#FFB347' },
+  { label: 'שירות + תשתיות',  cx: 510, cy: 625, rx: 210, ry: 90,  color: '#4FC3F7' },
+];
+
+const blobGroup = document.createElementNS(NS, 'g');
+zoneBlobData.forEach(b => {
+  const el = document.createElementNS(NS, 'ellipse');
+  el.setAttribute('cx', b.cx); el.setAttribute('cy', b.cy);
+  el.setAttribute('rx', b.rx); el.setAttribute('ry', b.ry);
+  el.setAttribute('fill', b.color);
+  el.setAttribute('opacity', '0.045');
+  blobGroup.appendChild(el);
+
+  const lbl = document.createElementNS(NS, 'text');
+  lbl.setAttribute('x', b.cx); lbl.setAttribute('y', b.cy - b.ry + 14);
+  lbl.setAttribute('text-anchor', 'middle');
+  lbl.setAttribute('fill', b.color);
+  lbl.setAttribute('font-size', '10');
+  lbl.setAttribute('opacity', '0.4');
+  lbl.setAttribute('font-family', 'Segoe UI, Arial Hebrew, Arial');
+  lbl.textContent = b.label;
+  blobGroup.appendChild(lbl);
+});
+svg.appendChild(blobGroup);
+
+// ── LINES layer ──
+const lineGroup = document.createElementNS(NS, 'g');
+svg.appendChild(lineGroup);
+
+// ── BUBBLES layer ──
+const nodeGroup = document.createElementNS(NS, 'g');
+svg.appendChild(nodeGroup);
+
+// ── draw lines ──
+function drawLines() {
+  while (lineGroup.firstChild) lineGroup.removeChild(lineGroup.firstChild);
+  CONNECTIONS.forEach(([fid, tid, type]) => {
+    const f = pos[fid], t = pos[tid];
+    const line = document.createElementNS(NS, 'line');
+    line.setAttribute('x1', f.x); line.setAttribute('y1', f.y);
+    line.setAttribute('x2', t.x); line.setAttribute('y2', t.y);
+    if (type === 'main') {
+      line.setAttribute('stroke', 'rgba(255,209,102,0.45)');
+      line.setAttribute('stroke-width', '2.2');
+      line.setAttribute('stroke-dasharray', '7,4');
+    } else if (type === 'util') {
+      line.setAttribute('stroke', 'rgba(160,174,192,0.3)');
+      line.setAttribute('stroke-width', '1.2');
+      line.setAttribute('stroke-dasharray', '3,5');
+    } else {
+      line.setAttribute('stroke', 'rgba(255,255,255,0.12)');
+      line.setAttribute('stroke-width', '1.5');
+      line.setAttribute('stroke-dasharray', '5,4');
+    }
+    lineGroup.appendChild(line);
+  });
+}
+
+// ── draw nodes ──
+function drawNodes() {
+  while (nodeGroup.firstChild) nodeGroup.removeChild(nodeGroup.firstChild);
+
+  NODES.forEach(node => {
+    const zone = ZONES[node.zone];
+    const rad  = r(node.area);
+    const p    = pos[node.id];
+
+    const g = document.createElementNS(NS, 'g');
+    g.setAttribute('class', 'bubble-g');
+    g.setAttribute('data-id', node.id);
+    g.setAttribute('transform', `translate(${p.x},${p.y})`);
+
+    // outer ring
+    const ring = document.createElementNS(NS, 'circle');
+    ring.setAttribute('r', rad + 6);
+    ring.setAttribute('fill', 'none');
+    ring.setAttribute('stroke', zone.color);
+    ring.setAttribute('stroke-width', '1.2');
+    ring.setAttribute('opacity', '0.22');
+    g.appendChild(ring);
+
+    // main fill
+    const circ = document.createElementNS(NS, 'circle');
+    circ.setAttribute('r', rad);
+    circ.setAttribute('fill', zone.color);
+    circ.setAttribute('stroke', zone.stroke);
+    circ.setAttribute('stroke-width', '2.2');
+    circ.setAttribute('filter', 'url(#dropshadow)');
+    circ.setAttribute('opacity', '0.93');
+    g.appendChild(circ);
+
+    // label lines
+    const fs = rad < 20 ? 8.5 : rad < 28 ? 10 : rad < 38 ? 11.5 : 12.5;
+    const lh = fs + 3;
+    const lines = node.label;
+    const startY = -(lines.length - 1) * lh / 2 - (node.area > 18 ? lh * 0.35 : 0);
+
+    lines.forEach((ln, i) => {
+      const t = document.createElementNS(NS, 'text');
+      t.setAttribute('text-anchor', 'middle');
+      t.setAttribute('dominant-baseline', 'middle');
+      t.setAttribute('fill', zone.text);
+      t.setAttribute('font-size', fs);
+      t.setAttribute('font-weight', '700');
+      t.setAttribute('font-family', 'Segoe UI, Arial Hebrew, Arial');
+      t.setAttribute('y', startY + i * lh);
+      t.textContent = ln;
+      g.appendChild(t);
+    });
+
+    // area label
+    if (node.area > 12) {
+      const at = document.createElementNS(NS, 'text');
+      at.setAttribute('text-anchor', 'middle');
+      at.setAttribute('dominant-baseline', 'middle');
+      at.setAttribute('fill', zone.text);
+      at.setAttribute('font-size', Math.max(fs - 2, 7.5));
+      at.setAttribute('opacity', '0.65');
+      at.setAttribute('font-family', 'Segoe UI, Arial, sans-serif');
+      at.setAttribute('y', startY + lines.length * lh);
+      at.textContent = node.area + ' מ"ר';
+      g.appendChild(at);
+    }
+
+    nodeGroup.appendChild(g);
+  });
+
+  attachDrag();
+}
+
+// ── DRAG ──
+let dragging = null, ox = 0, oy = 0;
+
+function attachDrag() {
+  nodeGroup.querySelectorAll('.bubble-g').forEach(g => {
+    g.addEventListener('mousedown', e => {
+      dragging = g.getAttribute('data-id');
+      ox = e.clientX - pos[dragging].x;
+      oy = e.clientY - pos[dragging].y;
+      e.preventDefault();
+    });
+  });
+}
+
+svg.addEventListener('mousemove', e => {
+  if (!dragging) return;
+  pos[dragging].x = e.clientX - ox;
+  pos[dragging].y = e.clientY - oy;
+  drawLines();
+  const g = nodeGroup.querySelector(`[data-id="${dragging}"]`);
+  if (g) g.setAttribute('transform', `translate(${pos[dragging].x},${pos[dragging].y})`);
+});
+
+svg.addEventListener('mouseup', () => { dragging = null; });
+svg.addEventListener('mouseleave', () => { dragging = null; });
+
+// ── LEGEND ──
+const legendEl = document.getElementById('legend');
+Object.entries(ZONES).forEach(([, zone]) => {
+  const item = document.createElement('div');
+  item.className = 'legend-item';
+  item.innerHTML = `<div class="legend-dot" style="background:${zone.color};border:2px solid ${zone.stroke}"></div><span>${zone.label}</span>`;
+  legendEl.appendChild(item);
+});
+
+// ── TOTAL ──
+const totalArea = NODES.reduce((s, n) => s + n.area, 0);
+document.getElementById('total').innerHTML =
+  `<strong>סה"כ שטח לפי הפרוגרמה:</strong> &nbsp;${totalArea} מ"ר &nbsp;|&nbsp; שטח מגרש: ~1,270 מ"ר`;
+
+// ── INIT ──
+drawLines();
+drawNodes();
+</script>
+</body>
+</html>
