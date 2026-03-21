@@ -1,0 +1,323 @@
+// ═══════════════════════════════════════════════════════════════════════════
+// ATR Strategy Filter + Support & Resistance
+// Strategy Rules:
+//   • No entry if 50% of Weekly ATR realized → wait for pullback below it
+//   • No entry if 50% of Daily ATR realized  → wait for pullback below it
+//   • Marks Daily S/R (prev day high/low)
+//   • Marks last 1D Pivot S/R (confirmed by ≥2 daily candles each side)
+// ═══════════════════════════════════════════════════════════════════════════
+//@version=5
+indicator("ATR Strategy Filter + S/R [by Strategy]",
+     overlay        = true,
+     max_lines_count  = 300,
+     max_labels_count = 300,
+     max_boxes_count  = 100)
+
+// ─────────────────────────────────────────────────────────────────────────
+// INPUTS
+// ─────────────────────────────────────────────────────────────────────────
+grpATR = "⚡ ATR Settings"
+atrPeriod     = input.int   (14,   "ATR Period",                             group=grpATR, minval=1)
+atrThreshPct  = input.float (0.50, "ATR Filter Threshold (0.5 = 50%)",       group=grpATR, minval=0.10, maxval=1.0, step=0.05)
+showDayATR    = input.bool  (true, "Show Daily ATR ±50% Lines",              group=grpATR)
+showWkATR     = input.bool  (true, "Show Weekly ATR ±50% Lines",             group=grpATR)
+
+grpSR = "📊 Support & Resistance"
+pivotStrength = input.int   (2,    "Pivot Strength (candles each side ≥ 2)", group=grpSR,  minval=1, maxval=5)
+showPrevDay   = input.bool  (true, "Show Previous Day High / Low",           group=grpSR)
+show1dPivots  = input.bool  (true, "Show 1D Pivot S/R (last confirmed)",     group=grpSR)
+srLineLen     = input.int   (100,  "S/R Line Extension (bars right)",        group=grpSR,  minval=5, maxval=500)
+
+grpExtra = "➕ Extra Confluence Filters"
+showRSI       = input.bool  (true, "Show RSI Zone Label",                    group=grpExtra)
+rsiPeriod     = input.int   (14,   "RSI Period",                             group=grpExtra, minval=2)
+showVolFilter = input.bool  (true, "Show Volume vs MA Filter",               group=grpExtra)
+volMAPeriod   = input.int   (20,   "Volume MA Period",                       group=grpExtra, minval=2)
+showRR        = input.bool  (true, "Show Risk/Reward to nearest S/R",        group=grpExtra)
+
+grpDisp = "🎨 Display"
+showBG        = input.bool  (true, "Background color (blocked = red)",       group=grpDisp)
+showTable     = input.bool  (true, "Show Info Table",                        group=grpDisp)
+tablePos      = input.string("Top Right", "Table Position",
+     options=["Top Right","Top Left","Bottom Right","Bottom Left"],           group=grpDisp)
+
+// ─────────────────────────────────────────────────────────────────────────
+// COLORS
+// ─────────────────────────────────────────────────────────────────────────
+C_GREEN   = color.new(color.lime,   0)
+C_RED     = color.new(color.red,    0)
+C_ORANGE  = color.new(color.orange, 0)
+C_PURPLE  = color.new(color.purple, 0)
+C_YELLOW  = color.new(color.yellow, 0)
+C_WHITE   = color.new(color.white,  0)
+C_GRAY    = color.new(color.gray,   0)
+
+// ─────────────────────────────────────────────────────────────────────────
+// MULTI-TIMEFRAME DATA
+// ─────────────────────────────────────────────────────────────────────────
+
+// ── Daily ──────────────────────────────────────────────────────────────
+[dOpen, dHigh, dLow, dClose, dATR] = request.security(
+     syminfo.tickerid, "D",
+     [open, high, low, close, ta.atr(atrPeriod)],
+     lookahead = barmerge.lookahead_off)
+
+dPrevHigh = request.security(syminfo.tickerid, "D", high[1],
+     lookahead = barmerge.lookahead_off)
+dPrevLow  = request.security(syminfo.tickerid, "D", low[1],
+     lookahead = barmerge.lookahead_off)
+
+// ── Weekly ─────────────────────────────────────────────────────────────
+[wOpen, wHigh, wLow, wClose, wATR] = request.security(
+     syminfo.tickerid, "W",
+     [open, high, low, close, ta.atr(atrPeriod)],
+     lookahead = barmerge.lookahead_off)
+
+// ─────────────────────────────────────────────────────────────────────────
+// ATR FILTER LOGIC
+// ─────────────────────────────────────────────────────────────────────────
+
+// 50% ATR boundary levels from each timeframe's open
+dATR_Up   = dOpen + dATR * atrThreshPct
+dATR_Down = dOpen - dATR * atrThreshPct
+wATR_Up   = wOpen + wATR * atrThreshPct
+wATR_Down = wOpen - wATR * atrThreshPct
+
+// Realized = candle has touched or crossed the 50% ATR line
+dUpBreached   = dHigh >= dATR_Up
+dDownBreached = dLow  <= dATR_Down
+wUpBreached   = wHigh >= wATR_Up
+wDownBreached = wLow  <= wATR_Down
+
+dATRBlocked = dUpBreached or dDownBreached
+wATRBlocked = wUpBreached or wDownBreached
+
+// Pullback logic: breached then price returns back inside the band
+// (price is now between dATR_Down and dATR_Up → pullback occurred)
+dPulledBack = dATRBlocked and (close < dATR_Up and close > dATR_Down)
+wPulledBack = wATRBlocked and (close < wATR_Up and close > wATR_Down)
+
+// Entry blocked = any ATR filter hit AND no pullback yet
+dEntryBlock = dATRBlocked and not dPulledBack
+wEntryBlock = wATRBlocked and not wPulledBack
+entryBlocked = dEntryBlock or wEntryBlock
+
+// ─────────────────────────────────────────────────────────────────────────
+// PIVOT S/R ON 1D TIMEFRAME
+// ─────────────────────────────────────────────────────────────────────────
+
+[ph1d, pl1d] = request.security(syminfo.tickerid, "D",
+     [ta.pivothigh(high, pivotStrength, pivotStrength),
+      ta.pivotlow (low,  pivotStrength, pivotStrength)],
+     lookahead = barmerge.lookahead_off)
+
+var float lastRes1d = na
+var float lastSup1d = na
+var int   resBar    = na
+var int   supBar    = na
+
+if not na(ph1d)
+    lastRes1d := ph1d
+    resBar    := bar_index
+if not na(pl1d)
+    lastSup1d := pl1d
+    supBar    := bar_index
+
+// ─────────────────────────────────────────────────────────────────────────
+// EXTRA CONFLUENCE
+// ─────────────────────────────────────────────────────────────────────────
+
+rsiVal   = ta.rsi(close, rsiPeriod)
+volMA    = ta.sma(volume, volMAPeriod)
+highVol  = volume > volMA * 1.5
+rsiOB    = rsiVal >= 70
+rsiOS    = rsiVal <= 30
+rsiNeutral = not rsiOB and not rsiOS
+
+// Distance to nearest S/R as multiple of daily ATR (risk/reward gauge)
+distToRes = math.abs(lastRes1d - close)
+distToSup = math.abs(close - lastSup1d)
+rrRatio   = distToRes > 0 and distToSup > 0 ?
+     math.round(distToRes / distToSup * 10) / 10 : na
+
+// ─────────────────────────────────────────────────────────────────────────
+// BACKGROUND
+// ─────────────────────────────────────────────────────────────────────────
+
+bgColor = dEntryBlock and wEntryBlock ? color.new(color.red,    82) :
+          dEntryBlock                 ? color.new(color.orange, 86) :
+          wEntryBlock                 ? color.new(color.purple, 88) :
+                                        color.new(color.green,  93)
+bgcolor(showBG ? bgColor : na)
+
+// ─────────────────────────────────────────────────────────────────────────
+// PLOT – ATR BANDS
+// ─────────────────────────────────────────────────────────────────────────
+
+// Daily ATR ±50% (orange dashed)
+p1 = plot(showDayATR ? dATR_Up   : na, "D-ATR +50%", C_ORANGE, 1, plot.style_stepline)
+p2 = plot(showDayATR ? dATR_Down : na, "D-ATR -50%", C_ORANGE, 1, plot.style_stepline)
+fill(p1, p2, color.new(color.orange, 95), title="Daily ATR Band")
+
+// Weekly ATR ±50% (purple dashed, thicker)
+p3 = plot(showWkATR ? wATR_Up   : na, "W-ATR +50%", C_PURPLE, 2, plot.style_stepline)
+p4 = plot(showWkATR ? wATR_Down : na, "W-ATR -50%", C_PURPLE, 2, plot.style_stepline)
+fill(p3, p4, color.new(color.purple, 95), title="Weekly ATR Band")
+
+// ─────────────────────────────────────────────────────────────────────────
+// PLOT – DAILY S/R (Previous Day High / Low)
+// ─────────────────────────────────────────────────────────────────────────
+
+plot(showPrevDay ? dPrevHigh : na, "Prev Day High",
+     color=color.new(color.red,   40), linewidth=1, style=plot.style_stepline)
+plot(showPrevDay ? dPrevLow  : na, "Prev Day Low",
+     color=color.new(color.lime,  40), linewidth=1, style=plot.style_stepline)
+
+// ─────────────────────────────────────────────────────────────────────────
+// DRAW – 1D PIVOT S/R LINES (extend right)
+// ─────────────────────────────────────────────────────────────────────────
+
+var line resLine = na
+var line supLine = na
+var label resLbl = na
+var label supLbl = na
+
+if show1dPivots and barstate.islast
+    line.delete(resLine)
+    line.delete(supLine)
+    label.delete(resLbl)
+    label.delete(supLbl)
+
+    if not na(lastRes1d)
+        resLine := line.new(resBar, lastRes1d,
+             bar_index + srLineLen, lastRes1d,
+             color=color.new(color.red, 20), width=2,
+             style=line.style_dashed, extend=extend.right)
+        resLbl  := label.new(bar_index, lastRes1d,
+             "1D RES  " + str.tostring(lastRes1d, "#.##"),
+             color=color.new(color.red, 70),
+             textcolor=color.white, style=label.style_label_left, size=size.small)
+
+    if not na(lastSup1d)
+        supLine := line.new(supBar, lastSup1d,
+             bar_index + srLineLen, lastSup1d,
+             color=color.new(color.lime, 20), width=2,
+             style=line.style_dashed, extend=extend.right)
+        supLbl  := label.new(bar_index, lastSup1d,
+             "1D SUP  " + str.tostring(lastSup1d, "#.##"),
+             color=color.new(color.green, 70),
+             textcolor=color.white, style=label.style_label_left, size=size.small)
+
+// ─────────────────────────────────────────────────────────────────────────
+// ALERTS – Pullback signal (ATR breached then price returns inside band)
+// ─────────────────────────────────────────────────────────────────────────
+
+alertcondition(dPulledBack,  "Daily ATR – Pullback Inside Band",  "Daily ATR exceeded then pulled back – potential entry zone")
+alertcondition(wPulledBack,  "Weekly ATR – Pullback Inside Band", "Weekly ATR exceeded then pulled back – potential entry zone")
+alertcondition(not entryBlocked, "Entry Unblocked",              "Neither Daily nor Weekly ATR is blocking entry")
+
+// Entry shape signals
+plotshape(dPulledBack and not dPulledBack[1],
+     title="Daily Pullback Signal", style=shape.triangleup,
+     location=location.belowbar, color=C_ORANGE, size=size.small)
+plotshape(wPulledBack and not wPulledBack[1],
+     title="Weekly Pullback Signal", style=shape.triangleup,
+     location=location.belowbar, color=C_PURPLE, size=size.normal)
+
+// ─────────────────────────────────────────────────────────────────────────
+// INFO TABLE
+// ─────────────────────────────────────────────────────────────────────────
+if showTable and barstate.islast
+    tPos = tablePos == "Top Right"    ? position.top_right    :
+           tablePos == "Top Left"     ? position.top_left     :
+           tablePos == "Bottom Right" ? position.bottom_right :
+                                        position.bottom_left
+
+    var table t = table.new(tPos, 2, 13,
+         bgcolor      = color.new(color.black, 65),
+         border_color = color.new(color.gray, 50),
+         border_width = 1,
+         frame_color  = color.new(color.gray, 30),
+         frame_width  = 1)
+
+    // Header
+    table.cell(t, 0, 0, "📋  INDICATOR",
+         text_color=C_WHITE, text_size=size.small,
+         bgcolor=color.new(color.navy, 40))
+    table.cell(t, 1, 0, "STATUS",
+         text_color=C_WHITE, text_size=size.small,
+         bgcolor=color.new(color.navy, 40))
+
+    // Daily ATR
+    table.cell(t, 0, 1, "Daily ATR (" + str.tostring(atrPeriod) + ")",
+         text_color=C_GRAY, text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(dATR, "#.####"),
+         text_color=C_YELLOW, text_size=size.small)
+
+    table.cell(t, 0, 2, "Daily ATR Filter",
+         text_color=C_GRAY, text_size=size.small)
+    table.cell(t, 1, 2,
+         dEntryBlock ? "⛔  BLOCKED" : dPulledBack ? "🔄  PULLBACK" : "✅  OK",
+         text_color = dEntryBlock ? C_RED : dPulledBack ? C_ORANGE : C_GREEN,
+         text_size=size.small)
+
+    // Weekly ATR
+    table.cell(t, 0, 3, "Weekly ATR (" + str.tostring(atrPeriod) + ")",
+         text_color=C_GRAY, text_size=size.small)
+    table.cell(t, 1, 3, str.tostring(wATR, "#.####"),
+         text_color=C_YELLOW, text_size=size.small)
+
+    table.cell(t, 0, 4, "Weekly ATR Filter",
+         text_color=C_GRAY, text_size=size.small)
+    table.cell(t, 1, 4,
+         wEntryBlock ? "⛔  BLOCKED" : wPulledBack ? "🔄  PULLBACK" : "✅  OK",
+         text_color = wEntryBlock ? C_RED : wPulledBack ? C_ORANGE : C_GREEN,
+         text_size=size.small)
+
+    // Overall entry
+    table.cell(t, 0, 5, "─── ENTRY SIGNAL ───",
+         text_color=C_GRAY, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+    table.cell(t, 1, 5, "",
+         bgcolor=color.new(color.gray, 80))
+
+    table.cell(t, 0, 6, "Entry Decision",
+         text_color=C_WHITE, text_size=size.small)
+    table.cell(t, 1, 6,
+         entryBlocked ? "🚫  NO ENTRY" : "🟢  ENTRY OK",
+         text_color = entryBlocked ? C_RED : C_GREEN,
+         text_size=size.small)
+
+    // S/R Levels
+    table.cell(t, 0, 7, "─── S/R LEVELS ───",
+         text_color=C_GRAY, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+    table.cell(t, 1, 7, "",
+         bgcolor=color.new(color.gray, 80))
+
+    table.cell(t, 0, 8, "Prev Day High (Res)",
+         text_color=C_GRAY, text_size=size.small)
+    table.cell(t, 1, 8, str.tostring(dPrevHigh, "#.####"),
+         text_color=color.new(color.red, 20), text_size=size.small)
+
+    table.cell(t, 0, 9, "Prev Day Low (Sup)",
+         text_color=C_GRAY, text_size=size.small)
+    table.cell(t, 1, 9, str.tostring(dPrevLow, "#.####"),
+         text_color=color.new(color.lime, 20), text_size=size.small)
+
+    table.cell(t, 0, 10, "1D Pivot Resistance",
+         text_color=C_GRAY, text_size=size.small)
+    table.cell(t, 1, 10, na(lastRes1d) ? "—" : str.tostring(lastRes1d, "#.####"),
+         text_color=color.new(color.red, 10), text_size=size.small)
+
+    table.cell(t, 0, 11, "1D Pivot Support",
+         text_color=C_GRAY, text_size=size.small)
+    table.cell(t, 1, 11, na(lastSup1d) ? "—" : str.tostring(lastSup1d, "#.####"),
+         text_color=color.new(color.lime, 10), text_size=size.small)
+
+    // Extra confluence
+    table.cell(t, 0, 12, "─── CONFLUENCE ───",
+         text_color=C_GRAY, text_size=size.tiny, bgcolor=color.new(color.gray, 80))
+    table.cell(t, 1, 12,
+         (showRSI ? "RSI " + str.tostring(math.round(rsiVal)) +
+          (rsiOB ? " 🔴OB" : rsiOS ? " 🟢OS" : " ⚪Neutral") + "  " : "") +
+         (showVolFilter ? (highVol ? "VOL 🔥High" : "VOL Normal") : ""),
+         text_color=C_YELLOW, text_size=size.tiny)
